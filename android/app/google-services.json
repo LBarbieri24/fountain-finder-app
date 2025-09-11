@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "913741131867",
+    "project_id": "fountain-finder-3306a",
+    "storage_bucket": "fountain-finder-3306a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:913741131867:android:92de64cca3d5513db4cf7e",
+        "android_client_info": {
+          "package_name": "com.example.fountain_finder"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDPvacJtngf8AYRyHEYC04Fl9iqGtXL3_4"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
