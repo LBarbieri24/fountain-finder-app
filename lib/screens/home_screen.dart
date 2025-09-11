@@ -1,13 +1,13 @@
-// Current home_screen.dart (from initial context)
+// lib/screens/home_screen.dart
+import 'dart:async'; // Required for Timer if you use debounce
+
 import 'package:flutter/material.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:geolocator/geolocator.dart';
-// import 'package:cloud_firestore/cloud_firestore.dart'; // Not directly used here, but by service
 import 'package:permission_handler/permission_handler.dart';
 import '../models/fountain.dart';
-import '../services/fountain_service.dart';
-// import 'add_fountain_screen.dart'; // Will be navigated to
-// import 'fountain_detail_screen.dart'; // Will be navigated to
+import '../services/fountain_service.dart'; // Your existing service
+import '../services/overpass_service.dart'; // <<< NEW SERVICE FOR OSM DATA
 
 class HomeScreen extends StatefulWidget {
   @override
@@ -18,84 +18,126 @@ class _HomeScreenState extends State<HomeScreen> {
   GoogleMapController? mapController;
   Position? currentPosition;
   Set<Marker> markers = {};
-  final FountainService fountainService = FountainService();
+  final FountainService _fountainService = FountainService(); // For user data
+  final OverpassService _overpassService = OverpassService(); // For public OSM data
+  bool _isLoading = true;
+  bool _isMapReady = false; // To ensure map is ready before fetching based on view
 
-  // Default location (Rome, Italy)
-  static const LatLng _defaultLocation = LatLng(41.9028, 12.4964);
-  LatLng _currentMapPosition = _defaultLocation;
+  static const LatLng _defaultLocation = LatLng(41.9028, 12.4964); // Rome
+  LatLng _currentMapCenter = _defaultLocation;
+  double _currentZoom = 13.0; // Keep track of zoom for fetch conditions
+
+  // Timer? _debounce; // Uncomment if you want to implement debounced fetching
 
   @override
   void initState() {
     super.initState();
-    _initializeLocationAndLoadFountains(); // Combined for clarity
+    _initializeLocationAndLoadInitialFountains();
   }
 
-  // Helper to combine async init tasks
-  Future<void> _initializeLocationAndLoadFountains() async {
+  // @override
+  // void dispose() {
+  //   _debounce?.cancel(); // Uncomment if you use debounce
+  //   super.dispose();
+  // }
+
+  Future<void> _initializeLocationAndLoadInitialFountains() async {
+    setState(() { _isLoading = true; });
     await _initializeLocation();
-    await _loadFountains(); // Load fountains after location is potentially set
+    if (_isMapReady || currentPosition != null) {
+      await _loadAndMergeFountains(centerToLoad: _currentMapCenter);
+    }
+    // If the map isn't ready yet, _loadAndMergeFountains will be called from _onMapCreated
+    if(mounted) setState(() { _isLoading = false; }); // Ensure loading is false if no initial load happened yet
   }
 
   Future<void> _initializeLocation() async {
+    // Simulate your existing location logic - ensure it updates _currentMapCenter
     var permission = await Permission.location.request();
-
     if (permission == PermissionStatus.granted) {
       try {
         Position position = await Geolocator.getCurrentPosition(
             desiredAccuracy: LocationAccuracy.high);
-
-        if (mounted) { // Check if widget is still in the tree
+        if (mounted) {
           setState(() {
             currentPosition = position;
-            _currentMapPosition = LatLng(position.latitude, position.longitude);
+            _currentMapCenter = LatLng(position.latitude, position.longitude);
           });
-
-          if (mapController != null) {
-            mapController!.animateCamera(
-                CameraUpdate.newLatLngZoom(_currentMapPosition, 15.0) // Zoom in a bit more
-            );
-          }
+          mapController?.animateCamera(CameraUpdate.newLatLngZoom(_currentMapCenter, 15.0));
         }
       } catch (e) {
         print('Error getting location: $e');
-        // Keep default location if error, or _currentMapPosition if already set
+        // Keep default or current if error
       }
     } else {
       print('Location permission denied.');
-      // Handle permission denial, perhaps show a message or use default
     }
   }
 
-  Future<void> _loadFountains() async {
-    print('--- _loadFountains called ---');
-    try {
-      List<Fountain> fountains = await fountainService.getAllFountains();
+  Future<void> _loadAndMergeFountains({LatLng? centerToLoad, LatLngBounds? boundsToLoad}) async {
+    if (!mounted) return;
+    setState(() { _isLoading = true; });
 
-      Set<Marker> newMarkers = fountains.map((fountain) {
-        return Marker(
+    try {
+      List<Fountain> publicFountains = [];
+      LatLng locationToFetch = centerToLoad ?? _currentMapCenter; // Use current map center if specific centerToLoad is null
+
+      // Fetch public fountains from Overpass API
+      double radius = _calculateRadiusForZoom(_currentZoom);
+      publicFountains = await _overpassService.fetchFountainsAround(locationToFetch, radiusMeters: radius);
+
+      // TODO: If you implement boundsToLoad logic in OverpassService, use it here if boundsToLoad is not null
+
+      Map<String, Fountain> combinedFountainsMap = {
+        for (var f in publicFountains) f.id: f
+      };
+
+      List<Fountain> firestoreFountains = await _fountainService.getAllFountains();
+
+      for (var fsFountain in firestoreFountains) {
+        if (combinedFountainsMap.containsKey(fsFountain.id)) {
+          combinedFountainsMap[fsFountain.id] = Fountain(
+            id: fsFountain.id,
+            latitude: fsFountain.latitude,
+            longitude: fsFountain.longitude,
+            name: fsFountain.name ?? combinedFountainsMap[fsFountain.id]?.name,
+            imageUrl: fsFountain.imageUrl ?? combinedFountainsMap[fsFountain.id]?.imageUrl,
+            createdAt: fsFountain.createdAt,
+            averageRating: fsFountain.averageRating,
+            reviewCount: fsFountain.reviewCount,
+          );
+        } else {
+          combinedFountainsMap[fsFountain.id] = fsFountain;
+        }
+      }
+
+      List<Fountain> finalFountainList = combinedFountainsMap.values.toList();
+
+      // --- VVV CHANGE 1: Correct Marker Creation VVV ---
+      Set<Marker> newMarkers = finalFountainList.map((fountain) {
+        bool isUserInteractive = fountain.reviewCount > 0 ||
+            (fountain.imageUrl != null && !publicFountains.any((pf) => pf.id == fountain.id && pf.imageUrl == fountain.imageUrl));
+        // ^ This logic can be further refined
+
+        return Marker( // Make sure this return statement is here
           markerId: MarkerId(fountain.id),
           position: LatLng(fountain.latitude, fountain.longitude),
           infoWindow: InfoWindow(
-            title: fountain.name ?? 'Fountain', // Consistent naming
+            title: fountain.name ?? 'Fountain',
             snippet: 'Tap to view details',
             onTap: () {
-              // Navigate to FountainDetailScreen using named route
               Navigator.pushNamed(context, '/fountainDetail', arguments: fountain)
                   .then((_) {
-                // Optional: Refresh fountains if data might have changed on detail screen
-                // For now, only reviews change, which doesn't directly affect this screen's markers
-                // But if you implement liking/saving fountains directly on detail, you might refresh.
-                // _loadFountains();
+                _loadAndMergeFountains(centerToLoad: _currentMapCenter);
               });
             },
           ),
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueBlue),
+          icon: BitmapDescriptor.defaultMarkerWithHue(
+              isUserInteractive ? BitmapDescriptor.hueAzure : BitmapDescriptor.hueGreen
+          ),
         );
       }).toSet();
 
-      // Add current location marker (optional, as myLocationEnabled is true)
-      // If you want a custom marker for current location, keep this.
-      // Otherwise, `myLocationEnabled: true` on GoogleMap handles it.
       if (currentPosition != null) {
         newMarkers.add(
           Marker(
@@ -106,113 +148,129 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         );
       }
+      // --- ^^^ CHANGE 1 END ^^^ ---
+
       if (mounted) {
         setState(() {
-          markers = newMarkers;
+          markers = newMarkers; // Assign the new set of markers
         });
       }
+
     } catch (e) {
-      print('Error loading fountains: $e');
-      _showErrorSnackBar('Error loading fountains. Please try again.');
+      print('Error loading/merging fountains: $e');
+      if(mounted) _showErrorSnackBar('Error loading fountains: ${e.toString()}'); // <<< MODIFIED: Pass error string
+    } finally {
+      if (mounted) setState(() { _isLoading = false; });
     }
   }
 
-  void _showFountainDetail(Fountain fountain) { // This method is now effectively replaced by the marker's onTap
-    Navigator.pushNamed(context, '/fountainDetail', arguments: fountain)
-        .then((_) {
-      _loadFountains(); // Still good to refresh if details could change affecting list
-    });
-  }
-
-  void _showErrorSnackBar(String message) {
-    if (mounted) { // Check if mounted before showing SnackBar
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(message), backgroundColor: Colors.red),
-      );
-    }
+  double _calculateRadiusForZoom(double zoom) {
+    if (zoom > 16) return 500;
+    if (zoom > 14) return 1000;
+    if (zoom > 12) return 3000;
+    return 5000;
   }
 
   void _onMapCreated(GoogleMapController controller) {
     mapController = controller;
-    // If currentPosition was fetched before map was created, move camera now
-    if (currentPosition != null) {
-      controller.animateCamera(
-        CameraUpdate.newLatLngZoom( // Zoom in a bit
-          LatLng(currentPosition!.latitude, currentPosition!.longitude),
-          15.0,
-        ),
-      );
-    }
+    _isMapReady = true;
+    _loadAndMergeFountains(centerToLoad: _currentMapCenter);
   }
+
+  void _onCameraIdle() {
+    print("Camera idle. New center: $_currentMapCenter, New Zoom: $_currentZoom");
+    // Uncomment for debouncing if API calls are too frequent
+    // if (_debounce?.isActive ?? false) _debounce!.cancel();
+    // _debounce = Timer(const Duration(milliseconds: 700), () {
+    //   _loadAndMergeFountains(centerToLoad: _currentMapCenter);
+    // });
+    _loadAndMergeFountains(centerToLoad: _currentMapCenter);
+  }
+
+  void _onCameraMove(CameraPosition position) {
+    _currentMapCenter = position.target;
+    _currentZoom = position.zoom;
+  }
+
+  // --- VVV CHANGE 2: Add _showErrorSnackBar method VVV ---
+  void _showErrorSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        duration: const Duration(seconds: 3), // Optional: show for longer
+      ),
+    );
+  }
+  // --- ^^^ CHANGE 2 END ^^^ ---
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Fountain Finder'),
-        backgroundColor: Colors.blue,
-        foregroundColor: Colors.white,
+        title: const Text('Fountain Finder (OSM)'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.my_location),
-            tooltip: 'Center on my location',
-            onPressed: () async {
-              if (currentPosition != null && mapController != null) {
-                mapController!.animateCamera(
-                  CameraUpdate.newCameraPosition(
-                    CameraPosition(
-                      target: LatLng(currentPosition!.latitude, currentPosition!.longitude),
-                      zoom: 15.0, // Consistent zoom
-                    ),
-                  ),
-                );
-              } else {
-                // If currentPosition is null, try to get it again
-                await _initializeLocation();
-              }
-            },
-          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh fountains',
-            onPressed: _loadFountains,
+            onPressed: () => _loadAndMergeFountains(centerToLoad: _currentMapCenter),
+          ),
+          IconButton( // Example: My Location Button
+            icon: const Icon(Icons.my_location),
+            tooltip: 'Center on my location',
+            onPressed: () {
+              if (currentPosition != null && mapController != null) {
+                mapController!.animateCamera(
+                  CameraUpdate.newLatLngZoom(
+                    LatLng(currentPosition!.latitude, currentPosition!.longitude),
+                    15.0,
+                  ),
+                );
+              } else {
+                _initializeLocation(); // Try to get location again if not available
+              }
+            },
           ),
         ],
       ),
-      body: GoogleMap(
-        onMapCreated: _onMapCreated,
-        initialCameraPosition: CameraPosition(
-          target: _currentMapPosition, // Uses fetched location or default
-          zoom: 13.0, // Initial overall zoom
-        ),
-        markers: markers,
-        myLocationEnabled: true, // Shows the blue dot for current location
-        myLocationButtonEnabled: false, // Using our custom button
-        mapType: MapType.normal,
-        onTap: (LatLng position) {
-          // Optional: Handle map tap - e.g. clear selection, or for quick add?
-          // For now, not used for a specific action.
-        },
-        // Consider adding zoom controls if not using pinch-to-zoom primarily
-        // zoomControlsEnabled: true,
+      body: Stack( // Use Stack to overlay loader if needed, or simpler logic
+        children: [
+          GoogleMap(
+            onMapCreated: _onMapCreated,
+            initialCameraPosition: CameraPosition(
+              target: _currentMapCenter,
+              zoom: _currentZoom,
+            ),
+            markers: markers,
+            myLocationEnabled: true,
+            myLocationButtonEnabled: false,
+            onCameraMove: _onCameraMove,
+            onCameraIdle: _onCameraIdle,
+          ),
+          if (_isLoading && markers.isEmpty) // Show full screen loader only if loading and no markers yet
+            const Center(child: CircularProgressIndicator()),
+          if (_isLoading && markers.isNotEmpty) // Show a smaller, less intrusive loader if updating
+            Positioned(
+              top: 10,
+              left: MediaQuery.of(context).size.width / 2 - 20, // Center it
+              child: const SizedBox(width: 40, height: 40, child: CircularProgressIndicator()),
+            )
+        ],
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: () {
-          // Navigate to AddFountainScreen using named route
-          // _currentMapPosition should reflect the center of the map view or user's location
-          Navigator.pushNamed(context, '/addFountain', arguments: _currentMapPosition)
-              .then((newFountainAdded) { // Assuming AddFountainScreen might return true if added
-                print('Popped from AddFountainScreen with: $newFountainAdded'); // Debug line
-                if (newFountainAdded == true) {
-                  print('Calling _loadFountains()'); // Debug line
-                  _loadFountains();
-                }
+          Navigator.pushNamed(context, '/addFountain', arguments: _currentMapCenter)
+              .then((newFountainAdded) {
+            if (newFountainAdded == true) {
+              _loadAndMergeFountains(centerToLoad: _currentMapCenter);
+            }
           });
         },
         child: const Icon(Icons.add),
         backgroundColor: Colors.blue,
-        tooltip: 'Add New Fountain',
       ),
+      floatingActionButtonLocation: FloatingActionButtonLocation.startFloat,
     );
   }
 }

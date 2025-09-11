@@ -55,41 +55,54 @@ class _AddReviewScreenState extends State<AddReviewScreen> {
     }
     setState(() => _isLoading = true);
 
-    try {
       // Since no auth, reviewerName is manually entered or can be anonymous
       String? reviewerName = _reviewerNameController.text.trim();
       if (reviewerName.isEmpty) reviewerName = "Anonymous";
 
 
       Review newReview = Review(
-        id: '', // Firestore will generate
+        id: '',
+        // Firestore will generate
         fountainId: widget.fountain.id,
         reviewerName: reviewerName,
-        userId: null, // Or a unique device ID if you implement that
+        userId: null,
+        // Or a unique device ID if you implement that
         waterFreshness: _freshnessRating,
         waterFlow: _flowRating,
         waterTaste: _tasteRating,
-        comment: _commentController.text.trim().isEmpty
+        comment: _commentController.text
+            .trim()
+            .isEmpty
             ? null
             : _commentController.text.trim(),
         createdAt: DateTime.now(),
       );
+      try {
+        await _fountainService.addReview(
+            widget.fountain.id, // The ID of the fountain (e.g., "osm_node_123")
+            newReview, // The review object itself
+            fountainBeingReviewed: widget
+                .fountain // <<< THIS IS WHAT BECOMES fountainDataIfPublicAndNew
+        );
 
-      await _fountainService.addReview(widget.fountain.id, newReview);
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Review submitted!'), backgroundColor: Colors.green),
-      );
-      Navigator.pop(context, true); // Pop and indicate success
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error submitting review: $e'), backgroundColor: Colors.red),
-      );
-    } finally {
-      setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Review submitted!'),
+              backgroundColor: Colors.green),
+        );
+        Navigator.pop(context, true); // Pop and indicate success
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error submitting review: $e'),
+              backgroundColor: Colors.red),
+        );
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
+      }
     }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(

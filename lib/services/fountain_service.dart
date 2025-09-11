@@ -87,56 +87,114 @@ class FountainService {
   }
 
   // Add a review to a fountain
-  Future<void> addReview(String fountainId, Review review) async {
-    try {
-      await _firestore
-          .collection('fountains')
-          .doc(fountainId)
-          .collection('reviews')
-          .add(review.toFirestore());
+  Future<void> addReview(String fountainId, Review review, {Fountain? fountainBeingReviewed}) async {
+    final fountainDocRef = _firestore.collection('fountains').doc(fountainId);
+    // Let Firestore generate the ID for the new review document
+    final newReviewDocRef = fountainDocRef.collection('reviews').doc();
 
-      await _updateFountainReviewStats(fountainId);
+    try {
+      // Add the auto-generated ID to the review object before saving
+      // This assumes your Review model has an 'id' field and toFirestore can handle it.
+      // If Review.toFirestore() doesn't take an id, you might need to adjust how the ID is included.
+      // One common way is:
+      // Map<String, dynamic> reviewData = review.toFirestore();
+      // reviewData['id'] = newReviewDocRef.id; // Add/update ID field
+      // await newReviewDocRef.set(reviewData);
+
+      // Assuming your Review model's toFirestore method doesn't already handle the ID:
+      // Or, if your Review has an immutable ID, clone it with the new ID if your model supports that.
+      // For simplicity, let's assume toFirestore() returns a map and we add the ID.
+      Map<String, dynamic> reviewData = review.toFirestore();
+      // If your review object itself should store the ID after creation,
+      // you might update the review object instance, but for saving to Firestore:
+      // reviewData['id'] = newReviewDocRef.id; // Optional: Store the doc ID within the review doc itself.
+
+      await newReviewDocRef.set(reviewData);
+      print('Review added with ID: ${newReviewDocRef.id} for fountain $fountainId');
+
+      // Now update the aggregate stats for the fountain, passing the fountain data
+      await _updateFountainReviewStats(fountainId, fountainDataIfPublicAndNew: fountainBeingReviewed);
+
     } catch (e) {
       print('Error adding review to fountain $fountainId: $e');
       throw Exception('Failed to add review');
     }
   }
 
+// lib/services/fountain_service.dart
+// ... (other methods are from your "last working version")
+
   // Update fountain's average rating and review count
-  Future<void> _updateFountainReviewStats(String fountainId) async {
+  Future<void> _updateFountainReviewStats(String fountainId, {Fountain? fountainDataIfPublicAndNew}) async {
     final fountainRef = _firestore.collection('fountains').doc(fountainId);
 
+    String fountainNameToPrint = fountainDataIfPublicAndNew?.name ?? "N/A (or object is null)";
+    print(
+        "Attempting to update stats for $fountainId. fountainDataIfPublicAndNew is ${fountainDataIfPublicAndNew == null ? 'NULL' : 'NOT NULL with name: $fountainNameToPrint'}");
+
     await _firestore.runTransaction((transaction) async {
-      final reviewsSnapshot = await fountainRef.collection('reviews').get();
+      // Step 1: Get the current state of the fountain document
+      DocumentSnapshot fountainDocSnapshot = await transaction.get(fountainRef); // Keep as DocumentSnapshot for now
+
+      // Step 2: Check if it's an OSM fountain needing a shadow document
+      if (!fountainDocSnapshot.exists && fountainDataIfPublicAndNew != null) {
+        print("TRANSACTION: Fountain $fountainId does not exist. Creating shadow document.");
+        // Create the shadow document
+        transaction.set(fountainRef, {
+          'latitude': fountainDataIfPublicAndNew.latitude,
+          'longitude': fountainDataIfPublicAndNew.longitude,
+          'name': fountainDataIfPublicAndNew.name, // Can be null
+          'imageUrl': fountainDataIfPublicAndNew.imageUrl, // Can be null
+          'createdAt': FieldValue.serverTimestamp(), // USE THIS FOR NEWLY CREATED SHADOW DOCS
+          'averageRating': 0.0, // Initial value, will be updated below
+          'reviewCount': 0,   // Initial value, will be updated below
+          // 'isOsmFountain': true, // Optional: You could add a flag like this
+        });
+        // Note: After transaction.set(), fountainDocSnapshot is STALE for this transaction pass.
+        // The document is now considered "created" for subsequent operations in this transaction.
+      } else if (!fountainDocSnapshot.exists && fountainDataIfPublicAndNew == null) {
+        // This should not happen if the UI passes fountain data for OSM fountains.
+        // This means it's not a known user-added fountain, and we don't have data to create a shadow.
+        print("TRANSACTION ERROR: Fountain $fountainId does not exist and no data provided to create it. Cannot update stats.");
+        throw Exception("Fountain $fountainId not found and no creation data provided.");
+      }
+
+      // Step 3: Get all reviews for this fountain
+      // This get() will happen on the current state of the subcollection.
+      // Since addReview() writes the review *before* calling this, the new review will be included.
+      final reviewsSnapshot = await fountainRef.collection('reviews').get(); // Get reviews
       final reviewDocs = reviewsSnapshot.docs;
 
-      if (reviewDocs.isEmpty) {
-        transaction.update(fountainRef, {
-          'averageRating': 0.0,
-          'reviewCount': 0,
-        });
-        return;
+      // Step 4: Calculate new average rating and review count
+      double newAverageFountainRating = 0.0;
+      int newReviewCount = 0;
+
+      if (reviewDocs.isNotEmpty) {
+        double totalRatingSum = 0;
+        for (var reviewDoc in reviewDocs) { // reviewDoc is QueryDocumentSnapshot
+          Review review = Review.fromFirestore(
+              reviewDoc as DocumentSnapshot<Map<String,dynamic>>, // Your working cast
+              reviewDoc.id
+          );
+          totalRatingSum += review.averageRating; // Make sure Review model provides this correctly
+        }
+        newReviewCount = reviewDocs.length;
+        newAverageFountainRating = totalRatingSum / newReviewCount;
       }
 
-      double totalRatingSum = 0;
-      for (var reviewDoc in reviewDocs) { // loop variable is 'reviewDoc'
-        Review review = Review.fromFirestore(
-          reviewDoc as DocumentSnapshot<Map<String,dynamic>>, // Use reviewDoc
-          reviewDoc.id                                        // Use reviewDoc.id
-        );
-        totalRatingSum += review.averageRating;
-      }
-
-      double newAverageFountainRating = totalRatingSum / reviewDocs.length;
-      int newReviewCount = reviewDocs.length;
-
-      transaction.update(fountainRef, {
+      // Step 5: Update the fountain document with the new stats
+      // If the document was created in Step 2, this acts as updating the initial fields.
+      // If the document already existed, this updates its existing fields.
+      print("TRANSACTION: Updating $fountainId with: Rating=${newAverageFountainRating.toStringAsFixed(1)}, Count=$newReviewCount");
+      transaction.update(fountainRef, { // Using .update() is fine, as it should exist or have just been .set()
         'averageRating': double.parse(newAverageFountainRating.toStringAsFixed(1)),
         'reviewCount': newReviewCount,
       });
+
     }).catchError((error) {
-        print("Failed to update fountain review stats for $fountainId: $error");
-        throw Exception("Failed to update fountain review stats.");
+      print("TRANSACTION FAILED for $fountainId: $error");
+      // Re-throw the error so the calling function in addReview can catch it
+      throw Exception("Failed to update fountain review stats transactionally: $error");
     });
   }
 
