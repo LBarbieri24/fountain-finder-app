@@ -252,7 +252,7 @@ class _FountainDetailScreenState extends State<FountainDetailScreen> {
                       _displayFountain.imageUrl!, // MODIFIED
                       width: double.infinity,
                       height: 200,
-                      fit: BoxFit.cover,
+                      fit: BoxFit.contain,
                       errorBuilder: (context, error, stackTrace) {
                         return Container(
                           height: 200,

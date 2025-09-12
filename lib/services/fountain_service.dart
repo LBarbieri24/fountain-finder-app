@@ -92,12 +92,27 @@ class FountainService {
     final newReviewDocRef = fountainDocRef.collection('reviews').doc();
 
     String? newFountainImageUrl;
+    String? oldImageUrl;
 
     try {
+      // If we are uploading a new image, we must first find the old image's URL
       if (imageFileForFountain != null) {
+        DocumentSnapshot fountainDoc = await fountainDocRef.get();
+        if (fountainDoc.exists) {
+          final data = fountainDoc.data() as Map<String, dynamic>?;
+          // Check if data is not null and 'imageUrl' exists
+          if (data != null && data.containsKey('imageUrl')) {
+            oldImageUrl = data['imageUrl'] as String?;
+            if (oldImageUrl != null) {
+              print("Found old image URL to be deleted later: $oldImageUrl");
+            }
+          }
+        }
+
+        // Now, upload the new image
         print("Uploading new image for fountain $fountainId...");
         newFountainImageUrl = await _uploadImage(imageFileForFountain);
-        print("New image uploaded for fountain $fountainId: $newFountainImageUrl");
+        print("New image uploaded, URL: $newFountainImageUrl");
       }
 
       Map<String, dynamic> reviewData = review.toFirestore();
@@ -110,8 +125,18 @@ class FountainService {
         newFountainImageUrl: newFountainImageUrl,
       );
 
+      if (oldImageUrl != null && oldImageUrl!.isNotEmpty) {
+        await _deleteImageFromUrl(oldImageUrl!);
+      }
+
     } catch (e) {
       print('Error adding review (and potentially image) to fountain $fountainId: $e');
+      // BONUS: If an error happened AFTER we uploaded a new image,
+      // we should delete that new image to prevent orphaned files.
+      if (newFountainImageUrl != null) {
+        print("Rolling back: deleting newly uploaded image due to an error.");
+        await _deleteImageFromUrl(newFountainImageUrl);
+      }
       throw Exception('Failed to add review.');
     }
   }
@@ -128,67 +153,75 @@ class FountainService {
         "Attempting to update stats for $fountainId. fountainDataIfPublicAndNew is ${fountainDataIfPublicAndNew == null ? 'NULL' : 'NOT NULL with name: $fountainNameToPrint'}");
 
     await _firestore.runTransaction((transaction) async {
-      // Step 1: Get the current state of the fountain document
-      DocumentSnapshot fountainDocSnapshot = await transaction.get(fountainRef); // Keep as DocumentSnapshot for now
+      DocumentSnapshot fountainDocSnapshot = await transaction.get(fountainRef);
 
-      // Step 2: Check if it's an OSM fountain needing a shadow document
       if (!fountainDocSnapshot.exists && fountainDataIfPublicAndNew != null) {
         print("TRANSACTION: Fountain $fountainId does not exist. Creating shadow document.");
-        // Create the shadow document
-        transaction.set(fountainRef, {
+        Map<String, dynamic> shadowData = { // Prepare data for shadow doc
           'latitude': fountainDataIfPublicAndNew.latitude,
           'longitude': fountainDataIfPublicAndNew.longitude,
-          'name': fountainDataIfPublicAndNew.name, // Can be null
-          'imageUrl': fountainDataIfPublicAndNew.imageUrl, // Can be null
-          'createdAt': FieldValue.serverTimestamp(), // USE THIS FOR NEWLY CREATED SHADOW DOCS
-          'averageRating': 0.0, // Initial value, will be updated below
-          'reviewCount': 0,   // Initial value, will be updated below
-          // 'isOsmFountain': true, // Optional: You could add a flag like this
-        });
-        // Note: After transaction.set(), fountainDocSnapshot is STALE for this transaction pass.
-        // The document is now considered "created" for subsequent operations in this transaction.
+          'name': fountainDataIfPublicAndNew.name,
+          'createdAt': FieldValue.serverTimestamp(),
+          'averageRating': 0.0,
+          'reviewCount': 0,
+        };
+        // If a new image URL is available during shadow creation, use it
+        if (newFountainImageUrl != null) {
+          print("TRANSACTION: Using newFountainImageUrl for shadow doc: $newFountainImageUrl");
+          shadowData['imageUrl'] = newFountainImageUrl;
+        } else {
+          // If no new image, but the fountain object passed in had one (e.g. OSM fountain with existing image)
+          shadowData['imageUrl'] = fountainDataIfPublicAndNew.imageUrl;
+        }
+        transaction.set(fountainRef, shadowData);
       } else if (!fountainDocSnapshot.exists && fountainDataIfPublicAndNew == null) {
-        // This should not happen if the UI passes fountain data for OSM fountains.
-        // This means it's not a known user-added fountain, and we don't have data to create a shadow.
         print("TRANSACTION ERROR: Fountain $fountainId does not exist and no data provided to create it. Cannot update stats.");
         throw Exception("Fountain $fountainId not found and no creation data provided.");
       }
 
-      // Step 3: Get all reviews for this fountain
-      // This get() will happen on the current state of the subcollection.
-      // Since addReview() writes the review *before* calling this, the new review will be included.
-      final reviewsSnapshot = await fountainRef.collection('reviews').get(); // Get reviews
+      final reviewsSnapshot = await fountainRef.collection('reviews').get();
       final reviewDocs = reviewsSnapshot.docs;
 
-      // Step 4: Calculate new average rating and review count
       double newAverageFountainRating = 0.0;
       int newReviewCount = 0;
 
       if (reviewDocs.isNotEmpty) {
         double totalRatingSum = 0;
-        for (var reviewDoc in reviewDocs) { // reviewDoc is QueryDocumentSnapshot
-          Review review = Review.fromFirestore(
-              reviewDoc as DocumentSnapshot<Map<String,dynamic>>, // Your working cast
-              reviewDoc.id
-          );
-          totalRatingSum += review.averageRating; // Make sure Review model provides this correctly
+        for (var reviewDoc in reviewDocs) {
+          Review review = Review.fromFirestore(reviewDoc as DocumentSnapshot<Map<String,dynamic>>, reviewDoc.id);
+          totalRatingSum += review.averageRating;
         }
         newReviewCount = reviewDocs.length;
         newAverageFountainRating = totalRatingSum / newReviewCount;
       }
 
-      // Step 5: Update the fountain document with the new stats
-      // If the document was created in Step 2, this acts as updating the initial fields.
-      // If the document already existed, this updates its existing fields.
-      print("TRANSACTION: Updating $fountainId with: Rating=${newAverageFountainRating.toStringAsFixed(1)}, Count=$newReviewCount");
-      transaction.update(fountainRef, { // Using .update() is fine, as it should exist or have just been .set()
+      // Prepare the data for the update
+      Map<String, dynamic> dataToUpdate = {
         'averageRating': double.parse(newAverageFountainRating.toStringAsFixed(1)),
         'reviewCount': newReviewCount,
-      });
+        'lastReviewedAt': FieldValue.serverTimestamp(), // Good to add this!
+      };
+
+      // *** THIS IS THE CRUCIAL ADDITION/MODIFICATION ***
+      if (newFountainImageUrl != null) {
+        print("TRANSACTION: Updating $fountainId with new imageUrl: $newFountainImageUrl");
+        dataToUpdate['imageUrl'] = newFountainImageUrl;
+      } else if (fountainDocSnapshot.exists) {
+        // If no NEW image is being provided, but the document already exists,
+        // we should ensure we don't accidentally wipe out an existing imageUrl
+        // UNLESS the intent is to clear it.
+        // If newFountainImageUrl is explicitly passed as null and you want to clear,
+        // then this logic might change. For now, assume if newFountainImageUrl is not null, update.
+        // If newFountainImageUrl IS null, we don't touch the existing 'imageUrl' field during this update.
+        // (The 'imageUrl' field was already set during shadow document creation if that path was taken)
+      }
+
+
+      print("TRANSACTION: Updating $fountainId with: Rating=${dataToUpdate['averageRating']}, Count=${dataToUpdate['reviewCount']}, ImageUrl=${dataToUpdate['imageUrl']}");
+      transaction.update(fountainRef, dataToUpdate);
 
     }).catchError((error) {
       print("TRANSACTION FAILED for $fountainId: $error");
-      // Re-throw the error so the calling function in addReview can catch it
       throw Exception("Failed to update fountain review stats transactionally: $error");
     });
   }
@@ -207,4 +240,24 @@ class FountainService {
       throw Exception('Failed to load fountain');
     }
   }
+
+  Future<void> _deleteImageFromUrl(String imageUrl) async {
+    // A quick check to ensure we don't try to delete non-Firebase URLs
+    if (!imageUrl.contains('firebasestorage.googleapis.com')) {
+      return;
+    }
+
+    try {
+      // Get the reference from the full HTTPS URL and delete the file
+      Reference photoRef = _storage.refFromURL(imageUrl);
+      await photoRef.delete();
+      print("Successfully deleted old image: $imageUrl");
+    } catch (e) {
+      // We print the error but don't want to stop the whole process if
+      // for some reason the old image can't be deleted.
+      print("Error deleting old image from URL $imageUrl: $e");
+    }
+  }
 }
+
+

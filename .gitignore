@@ -1,42 +1,31 @@
-gitignore
-    # Flutter/Dart
-    .dart_tool/
-    .flutter-plugins
-    .flutter-plugins-dependencies
-    .packages
-    .pub-cache/
-    .pub/
-    /build/
-    /ios/Pods/
-    /ios/.symlinks/
-    /ios/Flutter/App.framework
-    /ios/Flutter/Flutter.framework
-    /ios/Flutter/Generated.xcconfig
-    /ios/Runner/GeneratedPluginRegistrant.h
-    /ios/Runner/GeneratedPluginRegistrant.m
-    /android/app/build/
-    /android/.gradle/
-    /android/gradle/wrapper/gradle-wrapper.jar
-    /android/key.properties
-    *.iml
-    *.ipr
-    *.iws
-    .idea/
-    # If you use VS Code
-    .vscode/
+# Flutter/Dart
+build/
+.dart_tool/
+.packages
+.pub-cache/
 
-    # Firebase (if you have firebase_options.dart and don't want to commit it,
-    # though it's often fine to commit if it doesn't contain sensitive info.
-    # Be cautious with actual service account keys or sensitive API keys).
-    # firebase_options.dart # Usually fine to commit, but consider if sensitive.
+# IDE files
+.idea/
+.vscode/
 
-    # Secrets (if you have a separate secrets file - good practice)
-    # .env
-    # secrets.json
-    # secrets.yaml
+# Build artifacts
+*.apk
+*.aab
+*.ipa
+*.app
 
-    # macOS
-    .DS_Store
+# iOS
+/ios/Pods/
+/ios/.symlinks/
+/ios/Flutter/App.framework
+/ios/Flutter/engine
 
-    # Windows
-    Thumbs.db
+# Android
+/android/.gradle/
+/android/app/build/
+/android/build/
+local.properties
+
+# Logs and misc
+*.log
+.DS_Store
