@@ -52,8 +52,8 @@ class FountainService {
 
   Future<String> _uploadImage(File imageFile) async {
     try {
-      String fileName = 'fountain_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      Reference ref = _storage.ref().child('fountain_images/$fileName');
+      String fileName = 'fountain_images/fountain_${DateTime.now().millisecondsSinceEpoch}.jpg'; // Store in a folder
+      Reference ref = _storage.ref().child(fileName);
 
       UploadTask uploadTask = ref.putFile(imageFile);
       TaskSnapshot snapshot = await uploadTask;
@@ -87,37 +87,32 @@ class FountainService {
   }
 
   // Add a review to a fountain
-  Future<void> addReview(String fountainId, Review review, {Fountain? fountainBeingReviewed}) async {
+  Future<void> addReview(String fountainId, Review review, {Fountain? fountainBeingReviewed, File? imageFileForFountain}) async {
     final fountainDocRef = _firestore.collection('fountains').doc(fountainId);
-    // Let Firestore generate the ID for the new review document
     final newReviewDocRef = fountainDocRef.collection('reviews').doc();
 
+    String? newFountainImageUrl;
+
     try {
-      // Add the auto-generated ID to the review object before saving
-      // This assumes your Review model has an 'id' field and toFirestore can handle it.
-      // If Review.toFirestore() doesn't take an id, you might need to adjust how the ID is included.
-      // One common way is:
-      // Map<String, dynamic> reviewData = review.toFirestore();
-      // reviewData['id'] = newReviewDocRef.id; // Add/update ID field
-      // await newReviewDocRef.set(reviewData);
+      if (imageFileForFountain != null) {
+        print("Uploading new image for fountain $fountainId...");
+        newFountainImageUrl = await _uploadImage(imageFileForFountain);
+        print("New image uploaded for fountain $fountainId: $newFountainImageUrl");
+      }
 
-      // Assuming your Review model's toFirestore method doesn't already handle the ID:
-      // Or, if your Review has an immutable ID, clone it with the new ID if your model supports that.
-      // For simplicity, let's assume toFirestore() returns a map and we add the ID.
       Map<String, dynamic> reviewData = review.toFirestore();
-      // If your review object itself should store the ID after creation,
-      // you might update the review object instance, but for saving to Firestore:
-      // reviewData['id'] = newReviewDocRef.id; // Optional: Store the doc ID within the review doc itself.
-
       await newReviewDocRef.set(reviewData);
       print('Review added with ID: ${newReviewDocRef.id} for fountain $fountainId');
 
-      // Now update the aggregate stats for the fountain, passing the fountain data
-      await _updateFountainReviewStats(fountainId, fountainDataIfPublicAndNew: fountainBeingReviewed);
+      await _updateFountainReviewStats(
+        fountainId,
+        fountainDataIfPublicAndNew: fountainBeingReviewed, // This is passed to _updateFountainReviewStats
+        newFountainImageUrl: newFountainImageUrl,
+      );
 
     } catch (e) {
-      print('Error adding review to fountain $fountainId: $e');
-      throw Exception('Failed to add review');
+      print('Error adding review (and potentially image) to fountain $fountainId: $e');
+      throw Exception('Failed to add review.');
     }
   }
 
@@ -125,7 +120,7 @@ class FountainService {
 // ... (other methods are from your "last working version")
 
   // Update fountain's average rating and review count
-  Future<void> _updateFountainReviewStats(String fountainId, {Fountain? fountainDataIfPublicAndNew}) async {
+  Future<void> _updateFountainReviewStats(String fountainId, {Fountain? fountainDataIfPublicAndNew, String? newFountainImageUrl}) async {
     final fountainRef = _firestore.collection('fountains').doc(fountainId);
 
     String fountainNameToPrint = fountainDataIfPublicAndNew?.name ?? "N/A (or object is null)";

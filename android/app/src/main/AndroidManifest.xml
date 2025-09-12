@@ -1,4 +1,21 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- VVV NEW PERMISSIONS ADDED HERE VVV -->
+    <uses-permission android:name="android.permission.INTERNET" /> <!-- Likely already implicitly added by Flutter/Firebase but good to be explicit -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <!-- For older Android versions if you were writing to gallery, not strictly needed for just picking -->
+    <!-- <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" /> -->
+    <!-- For Google Maps & Location -->
+    <!-- Precise location (GPS and network-based) -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!-- Approximate location (network-based) -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- For Google Maps to download map tiles and access Google servers -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <!-- ^^^ END OF NEW PERMISSIONS ^^^ -->
+
     <application
         android:label="fountain_finder"
         android:name="${applicationName}"
@@ -42,6 +59,14 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <intent>
+            <action android:name="android.media.action.IMAGE_CAPTURE" />
+        </intent>
+        <!-- If image_picker needs to query gallery apps explicitly -->
+        <intent>
+            <action android:name="android.intent.action.PICK" />
+            <data android:mimeType="image/*" />
         </intent>
     </queries>
 </manifest>
