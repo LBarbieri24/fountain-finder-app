@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-
 import '../models/fountain.dart';
 import '../models/review.dart';
 import '../services/fountain_service.dart';
 import 'add_review_screen.dart';
+import 'package:fountain_finder/screens/full_screen_image_screen.dart';
 
 class FountainDetailScreen extends StatefulWidget {
   final Fountain fountain; // This is the initial fountain data
@@ -246,7 +246,40 @@ class _FountainDetailScreenState extends State<FountainDetailScreen> {
                 if (_displayFountain.imageUrl != null) ...[
                   // --- ^^^ MODIFIED ^^^ ---
                   const SizedBox(height: 16),
-                  ClipRRect(
+                  GestureDetector(
+                    onTap: () {
+                    Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                    builder: (_) => FullScreenImageScreen(imageUrl: _displayFountain.imageUrl!),
+                    ),
+                    );
+                    },
+                    child: Hero(
+                    // The tag must be unique, the URL is a good choice.
+                    tag: _displayFountain.imageUrl!,
+                    child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.network(
+                    _displayFountain.imageUrl!,
+                    width: double.infinity,
+                    height: 200,
+                    fit: BoxFit.cover, // BoxFit.cover often looks better in a card
+                    errorBuilder: (context, error, stackTrace) {
+                    return Container(
+                    height: 200,
+                    color: Colors.grey.shade300,
+                    child: const Center(
+                    child: Icon(Icons.error, color: Colors.grey),
+                    ),
+                    );
+                    },
+                    ),
+                    ),
+                    ),
+                  ),
+                  ],
+                  /*ClipRRect(
                     borderRadius: BorderRadius.circular(8),
                     child: Image.network(
                       _displayFountain.imageUrl!, // MODIFIED
@@ -264,7 +297,7 @@ class _FountainDetailScreenState extends State<FountainDetailScreen> {
                       },
                     ),
                   ),
-                ],
+                ],*/
 
                 // Average Rating Display
                 // --- VVV Use _displayFountain VVV ---

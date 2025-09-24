@@ -17,11 +17,11 @@
     <!-- ^^^ END OF NEW PERMISSIONS ^^^ -->
 
     <application
-        android:label="fountain_finder"
+        android:label="Fontalilli"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <meta-data android:name="com.google.android.geo.API_KEY"
-            android:value="INSERTAPIMAPSKEYHERE"/>
+            android:value="AIzaSyCt3jiDGMwbrY-_oVZksf281pIwh_o2DaE"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"
