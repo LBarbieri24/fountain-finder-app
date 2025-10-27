@@ -1,16 +1,6 @@
-# fountain_finder
+# Find and rate the public drinking fountains
 
-A new Flutter project.
+This project (for personal use) aims to create an Android app to help you find fresh water on hot summer days. It also features a review mechanism that allows users to upload pictures of fountains and give opinions about water flow, freshness, and taste.
 
-## Getting Started
-
-This project is a starting point for a Flutter application.
-
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Implementation details
+The project has been developed using Flutter by Google, along with Google Cloud and Firebase for the Maps API and storage space. The fountain database has been sourced from the OpenStreetMap database via API.
